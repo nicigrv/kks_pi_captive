@@ -64,6 +64,7 @@ echo
 MISSING=""
 dpkg -s dnsmasq-base >/dev/null 2>&1 || MISSING="$MISSING dnsmasq-base"
 command -v iw >/dev/null 2>&1        || MISSING="$MISSING iw"
+command -v nft >/dev/null 2>&1       || MISSING="$MISSING nftables"
 if [ -n "$MISSING" ]; then
   echo "Installiere:$MISSING"
   apt-get update && apt-get install -y $MISSING

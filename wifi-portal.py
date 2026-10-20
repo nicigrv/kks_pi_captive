@@ -16,11 +16,13 @@ Benötigt: NetworkManager (Standard ab Raspberry Pi OS Bookworm), dnsmasq-base, 
 Nur Python-Standardbibliothek.
 """
 import html
+import ipaddress
 import json
 import os
 import queue
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import threading
@@ -54,6 +56,10 @@ AP_VIF = os.environ.get("WP_AP_IFACE", "uap0")
 AP_SSID = os.environ.get("WP_AP_SSID", "Pi-Setup")
 AP_PASSWORD = os.environ.get("WP_AP_PASSWORD", "")
 AP_IP = os.environ.get("WP_AP_IP", "10.42.0.1")
+AP_NET = str(ipaddress.ip_network(f"{AP_IP}/24", strict=False))
+# Interner Port des Portals. Anfragen an Port 80 aus dem Hotspot-Netz werden per
+# nftables hierher umgeleitet – so stört ein anderer Webserver (z. B. Traefik/Docker) nicht.
+PORTAL_PORT = int(os.environ.get("WP_PORT", "8099"))
 GRACE = int(os.environ.get("WP_GRACE", "60"))
 RETRY = int(os.environ.get("WP_RETRY", "300"))
 HOLD = int(os.environ.get("WP_HOLD", "120"))
@@ -62,6 +68,7 @@ CONCURRENT = os.environ.get("WP_CONCURRENT", "auto").strip().lower() not in ("of
 ONLINE_TYPES = [t.strip() for t in os.environ.get("WP_ONLINE_TYPES", "wifi,ethernet").split(",") if t.strip()]
 
 AP_CON = "wifi-portal-ap"   # Name der Hotspot-Verbindung in NetworkManager
+NFT_TABLE = "wifi_portal"   # eigene nftables-Tabelle für die Port-Umleitung
 CON_PREFIX = "wlan-"        # Präfix für über das Portal angelegte WLANs
 HOSTNAME = socket.gethostname()
 AP_5G_CHANNELS = (36, 40, 44, 48)   # 5-GHz-Kanäle ohne Radarerkennung (für AP erlaubt)
@@ -87,9 +94,9 @@ def log(*args):
 
 
 # --- Hilfsfunktionen ---------------------------------------------------------
-def run(args, timeout=60):
+def run(args, timeout=60, stdin=None):
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, input=stdin)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args, 1, "", "timeout")
     except FileNotFoundError:
@@ -309,6 +316,9 @@ def bring_up_ap(iface, channel=6, band="bg"):
             delete_vif()
         return False
     if not start_http():
+        nmcli("connection", "down", "id", AP_CON)
+        if iface == AP_VIF:
+            delete_vif()
         return False
     state.update(ap=True, ap_iface=iface, ap_channel=(channel, band))
     mode = "Parallelbetrieb" if iface == AP_VIF else "Einzelbetrieb"
@@ -361,25 +371,66 @@ class PortalServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+IPT_RULE = ["PREROUTING", "-s", AP_NET, "-p", "tcp", "--dport", "80",
+            "-m", "comment", "--comment", "wifi-portal",
+            "-j", "REDIRECT", "--to-ports", str(PORTAL_PORT)]
+
+
+def redirect_on():
+    """Port 80 aus dem Hotspot-Netz auf den Portal-Port umleiten (vor Docker-Regeln)."""
+    redirect_off()
+    if shutil.which("nft"):
+        rules = (f"table ip {NFT_TABLE} {{\n"
+                 f"  chain prerouting {{\n"
+                 f"    type nat hook prerouting priority -110; policy accept;\n"
+                 f"    ip saddr {AP_NET} tcp dport 80 redirect to :{PORTAL_PORT}\n"
+                 f"  }}\n}}\n")
+        r = run(["nft", "-f", "-"], stdin=rules)
+        if r.returncode == 0:
+            return True
+        log("nftables-Umleitung fehlgeschlagen:", r.stderr.strip())
+    if shutil.which("iptables"):
+        r = run(["iptables", "-t", "nat", "-I", *IPT_RULE[:1], "1", *IPT_RULE[1:]])
+        if r.returncode == 0:
+            return True
+        log("iptables-Umleitung fehlgeschlagen:", r.stderr.strip())
+    log("Keine Port-Umleitung möglich – nftables installieren: sudo apt install nftables")
+    return False
+
+
+def redirect_off():
+    if shutil.which("nft"):
+        run(["nft", "delete", "table", "ip", NFT_TABLE])
+    if shutil.which("iptables"):
+        for _ in range(5):
+            if run(["iptables", "-t", "nat", "-D", *IPT_RULE]).returncode:
+                break
+
+
 def start_http():
     global httpd
     if httpd:
         return True
     for _ in range(10):
         try:
-            httpd = PortalServer((AP_IP, 80), Portal)
+            httpd = PortalServer((AP_IP, PORTAL_PORT), Portal)
             break
-        except OSError:
+        except OSError as e:
+            err = e
             time.sleep(1)
     else:
-        log("Webserver konnte nicht auf Port 80 starten")
+        log(f"Webserver konnte nicht auf Port {PORTAL_PORT} starten: {err}")
         return False
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    if not redirect_on():
+        stop_http()
+        return False
     return True
 
 
 def stop_http():
     global httpd
+    redirect_off()
     if httpd:
         httpd.shutdown()
         httpd.server_close()
@@ -658,6 +709,7 @@ def main():
         else:
             disable_concurrent("vom WLAN-Chip nicht unterstützt")
     stop_ap()  # Reste nach Absturz/Neustart aufräumen
+    redirect_off()
     nmcli("connection", "delete", "id", AP_CON)
     offline_since = None
     last_retry = last_scan = time.time()

@@ -25,6 +25,10 @@ WP_RETRY=300
 # Welche Verbindungen als "online" zählen. Nur "wifi" = Hotspot auch bei LAN-Kabel
 WP_ONLINE_TYPES='wifi,ethernet'
 
+# Interner Port des Portals (Port 80 aus dem Hotspot wird per nftables dorthin umgeleitet,
+# damit ein anderer Webserver wie Traefik/Docker auf Port 80 nicht stört)
+WP_PORT=8099
+
 # WLAN-Interface und virtuelle Hotspot-Schnittstelle
 WP_IFACE='wlan0'
 WP_AP_IFACE='uap0'
