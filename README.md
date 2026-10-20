@@ -61,6 +61,17 @@ Danach: `sudo systemctl restart wifi-portal`
 journalctl -u wifi-portal -f
 ```
 
+## Diagnose
+Erscheint kein Hotspot oder klappt etwas nicht, erstellt dieses Skript einen Bericht.
+Es trennt das WLAN, wartet 150 s, sammelt alle Infos und verbindet den Pi danach selbst wieder
+(die SSH-Verbindung bricht dabei ab, das ist normal):
+```bash
+cd ~/kks_pi_captive
+sudo bash diagnose.sh
+# nach ca. 3 Minuten wieder anmelden:
+cat /tmp/portal-diagnose.txt
+```
+
 ## Grenzen
 - Einzelbetrieb: Während der Hotspot läuft, kann nicht gescannt werden. Die Liste
   stammt vom Hotspot-Start; nicht gelistete Netze über „Anderes Netzwerk“ eintragen.
