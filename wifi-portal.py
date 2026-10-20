@@ -130,9 +130,23 @@ def devices():
     return [f for f in map(terse, out.splitlines()) if len(f) >= 4]
 
 
+# Virtuelle Schnittstellen (Docker, Bridges, VPN …) zählen nicht als Netzwerkverbindung
+VIRTUAL_PREFIXES = ("veth", "docker", "br-", "virbr", "vnet", "tun", "tap", "wg", "lo")
+
+
 def online():
-    return any(t in ONLINE_TYPES and s.startswith("connected") and c != AP_CON
-               for d, t, s, c, *_ in devices())
+    """True, wenn eine echte WLAN- oder LAN-Verbindung besteht.
+
+    Gezählt wird nur der Zustand "connected" von NetworkManager selbst verwalteten
+    Geräten – nicht "connected (externally)" (z. B. Docker-veth-Schnittstellen).
+    """
+    for d, t, s, c, *_ in devices():
+        if t not in ONLINE_TYPES or c == AP_CON or d == AP_VIF:
+            continue
+        if s.strip() != "connected" or d.startswith(VIRTUAL_PREFIXES):
+            continue
+        return True
+    return False
 
 
 def ap_running():
@@ -720,7 +734,9 @@ def main():
             if online():
                 offline_since = None
             else:
-                offline_since = offline_since or time.time()
+                if offline_since is None:
+                    offline_since = time.time()
+                    log(f"Kein Netzwerk erkannt – Hotspot startet in {GRACE} s")
                 if time.time() - offline_since >= GRACE:
                     log("Kein Netzwerk – starte Hotspot")
                     if start_ap():
