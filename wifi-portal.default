@@ -1,0 +1,30 @@
+# Einstellungen für wifi-portal – nach Änderungen:
+#   sudo systemctl restart wifi-portal
+# Name und Passwort werden bei der Installation abgefragt (sudo bash install.sh).
+
+# Name des Hotspots
+WP_AP_SSID='Pi-Setup'
+
+# Passwort für den Hotspot (leer = offenes Netz, sonst 8-63 Zeichen)
+WP_AP_PASSWORD=''
+
+# Sekunden ohne Netzwerk, bevor der Hotspot startet
+WP_GRACE=60
+
+# Parallelbetrieb: Hotspot (uap0) und WLAN-Verbindung (wlan0) gleichzeitig.
+# auto = verwenden, wenn der WLAN-Chip es kann (z. B. Pi 4), off = immer Einzelbetrieb
+WP_CONCURRENT='auto'
+
+# Sekunden, die der Hotspot nach erfolgreicher Verbindung noch an bleibt
+# (das Portal zeigt so lange IP, Hostname und WLAN an; "Fertig" beendet sofort)
+WP_HOLD=120
+
+# Einzelbetrieb: alle X Sekunden (wenn kein Handy verbunden ist) bekannte WLANs erneut probieren
+WP_RETRY=300
+
+# Welche Verbindungen als "online" zählen. Nur "wifi" = Hotspot auch bei LAN-Kabel
+WP_ONLINE_TYPES='wifi,ethernet'
+
+# WLAN-Interface und virtuelle Hotspot-Schnittstelle
+WP_IFACE='wlan0'
+WP_AP_IFACE='uap0'
