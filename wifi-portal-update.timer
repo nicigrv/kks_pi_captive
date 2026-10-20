@@ -1,0 +1,9 @@
+[Unit]
+Description=wifi-portal: jede Nacht um 3:00 Uhr nach Updates suchen
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Unit=wifi-portal-update.service
+
+[Install]
+WantedBy=timers.target

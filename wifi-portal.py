@@ -15,6 +15,7 @@ nicht, wird automatisch auf den Einzelbetrieb (Hotspot auf wlan0) gewechselt.
 Benötigt: NetworkManager (Standard ab Raspberry Pi OS Bookworm), dnsmasq-base, iw.
 Nur Python-Standardbibliothek.
 """
+import hmac
 import html
 import ipaddress
 import json
@@ -32,7 +33,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 # --- Einstellungen (überschreibbar über /etc/default/wifi-portal) -----------
-def load_conf(path="/etc/default/wifi-portal"):
+CONF_PATH = "/etc/default/wifi-portal"
+
+
+def load_conf(path=CONF_PATH):
     """Liest KEY='Wert'-Zeilen wie die Shell (Quotes, Sonderzeichen bleiben erhalten)."""
     try:
         with open(path, encoding="utf-8") as f:
@@ -86,6 +90,7 @@ state = {
 connect_requests = queue.Queue()
 ev_done = threading.Event()
 ev_rescan = threading.Event()
+ev_apconf = threading.Event()   # Hotspot-Name/-Passwort wurde im Portal geändert
 httpd = None
 
 
@@ -534,6 +539,7 @@ button.sec{background:#e8edf5;color:#1d2433;margin-top:10px}
 .ok p{color:#14532d;margin:8px 0}.big{font-size:1.35em;font-weight:700;color:#14532d}
 .info{background:#eef4ff;color:#1e3a8a;padding:10px 12px;border-radius:8px;font-size:.92em}
 .hint{font-size:.85em;font-weight:400;color:#5b6475}
+a{color:#2563eb}
 .spin{display:inline-block;width:16px;height:16px;border:3px solid #cfd5df;border-top-color:#2563eb;border-radius:50%;animation:s 1s linear infinite;vertical-align:middle;margin-right:8px}
 @keyframes s{to{transform:rotate(360deg)}}
 </style></head><body><div class="card">"""
@@ -573,6 +579,7 @@ def render_form():
 <button type="submit">Verbinden</button>
 </form>{rescan}
 <p class="hint">{hint}</p>
+<p class="hint"><a href="/settings">Hotspot-Name oder -Passwort ändern</a></p>
 <script>document.getElementById('ssid').onchange()</script>""" + FOOT
 
 
@@ -640,6 +647,85 @@ def status_payload():
     }
 
 
+# --- Hotspot-Einstellungen im Portal -----------------------------------------
+def set_conf(values):
+    """Schreibt KEY='Wert'-Zeilen in die Einstellungsdatei (bestehende Zeilen werden ersetzt)."""
+    try:
+        with open(CONF_PATH, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    for key, val in values.items():
+        new = f"{key}='{val}'"
+        for i, line in enumerate(lines):
+            if line.startswith(key + "="):
+                lines[i] = new
+                break
+        else:
+            lines.append(new)
+    tmp = CONF_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, CONF_PATH)
+
+
+def check_ap_settings(ssid, pw1, pw2, open_net, current):
+    """Prüft die Eingaben. Gibt (Fehlermeldung, neues Passwort) zurück."""
+    if AP_PASSWORD and not hmac.compare_digest(current.encode(), AP_PASSWORD.encode()):
+        time.sleep(2)  # Raten erschweren
+        return "Das aktuelle Hotspot-Passwort ist falsch.", None
+    if not ssid or len(ssid.encode()) > 32:
+        return "Der Name muss 1 bis 32 Zeichen lang sein.", None
+    if "'" in ssid or any(ord(ch) < 32 for ch in ssid):
+        return "Der Name enthält ein unerlaubtes Zeichen (z. B. ').", None
+    if open_net:
+        return None, ""
+    if not pw1 and not pw2:
+        return None, AP_PASSWORD  # Passwort bleibt
+    if pw1 != pw2:
+        return "Die neuen Passwörter stimmen nicht überein.", None
+    if not 8 <= len(pw1) <= 63:
+        return "Das neue Passwort muss 8 bis 63 Zeichen lang sein.", None
+    if "'" in pw1 or any(not 32 <= ord(ch) <= 126 for ch in pw1):
+        return "Das Passwort darf nur normale Zeichen ohne Umlaute und ohne ' enthalten.", None
+    return None, pw1
+
+
+def render_settings(msg=""):
+    err = f'<p class="err">{html.escape(msg)}</p>' if msg else ""
+    cur = ('<label for="cur">Aktuelles Hotspot-Passwort</label>'
+           '<input id="cur" name="cur" type="password" autocomplete="off" required>') if AP_PASSWORD else ""
+    return HEAD + f"""
+<h1>Hotspot-Einstellungen</h1>
+<p>Name und Passwort des WLANs, das <b>{html.escape(HOSTNAME)}</b> öffnet, wenn er kein Netzwerk hat.</p>{err}
+<form method="post" action="/settings">
+<label for="nssid">Name (SSID)</label>
+<input id="nssid" name="ssid" value="{html.escape(AP_SSID, quote=True)}" maxlength="32" required
+ autocapitalize="none" autocorrect="off" spellcheck="false">
+<label for="pw1">Neues Passwort</label>
+<input id="pw1" name="pw1" type="password" autocomplete="new-password" placeholder="leer lassen = Passwort bleibt">
+<label for="pw2">Neues Passwort wiederholen</label>
+<input id="pw2" name="pw2" type="password" autocomplete="new-password">
+<label class="hint"><input type="checkbox" name="open" value="1" style="width:auto"> ohne Passwort (offenes WLAN)</label>
+{cur}
+<button type="submit">Speichern</button>
+</form>
+<p class="hint">Nach dem Speichern startet der Hotspot neu. Dein Handy muss sich danach mit den neuen Daten
+wieder verbinden.</p>
+<p class="hint"><a href="/">&larr; zurück zur WLAN-Auswahl</a></p>""" + FOOT
+
+
+def render_settings_saved(ssid, has_pw):
+    pw = "mit dem neuen Passwort" if has_pw else "ohne Passwort"
+    return HEAD + f"""
+<h1>Gespeichert &#10004;</h1>
+<div class="ok"><p>Hotspot-Name: <b>{html.escape(ssid)}</b></p>
+<p>Passwort: <b>{"gesetzt" if has_pw else "keins (offenes WLAN)"}</b></p></div>
+<p>Der Hotspot startet in wenigen Sekunden neu. Verbinde dich danach mit
+„{html.escape(ssid)}“ {pw}.</p>""" + FOOT
+
+
 class Portal(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -668,6 +754,8 @@ class Portal(BaseHTTPRequestHandler):
             return self.redirect()
         if path == "/status":
             return self.send(200, json.dumps(status_payload()), ctype="application/json")
+        if path == "/settings":
+            return self.send(200, render_settings())
         if path != "/":
             return self.redirect()
         job = state["job"]
@@ -688,6 +776,8 @@ class Portal(BaseHTTPRequestHandler):
             return self.send(200, HEAD + '<meta http-equiv="refresh" content="8;url=/">'
                              '<h1>Suche nach WLANs …</h1><p><span class="spin"></span>'
                              'Die Liste wird gleich neu geladen.</p>' + FOOT)
+        if self.path == "/settings":
+            return self.handle_settings(body)
         if self.path != "/connect":
             return self.redirect(303)
         job = state["job"]
@@ -711,6 +801,30 @@ class Portal(BaseHTTPRequestHandler):
         state["job"] = {"ssid": ssid, "status": "connecting" if live else "legacy"}
         connect_requests.put((ssid, psk, manual))
         self.send(200, render_status())
+
+    def handle_settings(self, body):
+        global AP_SSID, AP_PASSWORD
+        job = state["job"]
+        if job and job.get("status") in ("connecting", "connected", "legacy"):
+            return self.send(200, render_settings("Bitte warten, bis die WLAN-Verbindung abgeschlossen ist."))
+        form = urllib.parse.parse_qs(body, keep_blank_values=True)
+
+        def get(key):
+            return form.get(key, [""])[0]
+
+        ssid = get("ssid").strip()
+        err, new_pw = check_ap_settings(ssid, get("pw1"), get("pw2"), get("open") == "1", get("cur"))
+        if err:
+            return self.send(200, render_settings(err))
+        try:
+            set_conf({"WP_AP_SSID": ssid, "WP_AP_PASSWORD": new_pw})
+        except OSError as e:
+            log("Einstellungen speichern fehlgeschlagen:", e)
+            return self.send(200, render_settings("Speichern fehlgeschlagen – siehe Log auf dem Pi."))
+        AP_SSID, AP_PASSWORD = ssid, new_pw
+        log(f"Hotspot-Einstellungen im Portal geändert: Name '{ssid}', Passwort {'gesetzt' if new_pw else 'keins'}")
+        ev_apconf.set()
+        self.send(200, render_settings_saved(ssid, bool(new_pw)))
 
 
 # --- Hauptschleife -----------------------------------------------------------
@@ -758,6 +872,14 @@ def main():
             continue
         except queue.Empty:
             pass
+
+        if ev_apconf.is_set():
+            ev_apconf.clear()
+            time.sleep(3)  # Antwortseite noch ans Handy ausliefern
+            log(f"Hotspot-Einstellungen geändert – starte Hotspot als '{AP_SSID}' neu")
+            if not bring_up_ap(state["ap_iface"], *(state["ap_channel"] or (6, "bg"))):
+                stop_ap()  # startet über die normale Logik neu
+            continue
 
         if ev_done.is_set():
             ev_done.clear()

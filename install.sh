@@ -1,10 +1,15 @@
 #!/bin/bash
 # Installiert wifi-portal (WLAN-Fallback-Hotspot mit Captive Portal)
-# Aufruf im Projektordner:  sudo bash install.sh
+# Aufruf im Projektordner:
+#   sudo bash install.sh            – fragt Name und Passwort des Hotspots ab
+#   sudo bash install.sh --update   – ohne Abfragen, Einstellungen bleiben (für das Auto-Update)
 set -e
 cd "$(dirname "$0")"
+REPO_DIR=$(pwd -P)
 
 CONF=/etc/default/wifi-portal
+UPDATE=0
+[ "${1:-}" = "--update" ] && UPDATE=1
 
 if [ "$EUID" -ne 0 ]; then
   echo "Bitte mit sudo ausführen: sudo bash install.sh"; exit 1
@@ -16,18 +21,25 @@ if ! systemctl is-active --quiet NetworkManager; then
   exit 1
 fi
 
+# --- Bisherige Werte (bei erneuter Installation) -----------------------------
+OLD_SSID="Pi-Setup"
+OLD_PW=""
+if [ -f "$CONF" ]; then
+  OLD_SSID=$(. "$CONF" 2>/dev/null; echo "${WP_AP_SSID:-Pi-Setup}")
+  OLD_PW=$(. "$CONF" 2>/dev/null; echo "${WP_AP_PASSWORD:-}")
+fi
+
+if [ "$UPDATE" -eq 1 ]; then
+  echo "=== wifi-portal – Update (Einstellungen bleiben erhalten) ==="
+  AP_SSID=$OLD_SSID
+  AP_PW=$OLD_PW
+else
 echo
 echo "=== wifi-portal – Installation ==="
 echo
 echo "Wenn der Raspberry Pi kein Netzwerk findet, öffnet er ein eigenes WLAN (Hotspot)."
 echo "Lege jetzt den Namen und das Passwort für dieses WLAN fest."
 echo
-
-# --- Bisherige Werte als Vorschlag übernehmen (bei erneuter Installation) ----
-OLD_SSID="Pi-Setup"
-if [ -f "$CONF" ]; then
-  OLD_SSID=$(. "$CONF" 2>/dev/null; echo "${WP_AP_SSID:-Pi-Setup}")
-fi
 
 # --- Hotspot-Name (SSID) abfragen --------------------------------------------
 while true; do
@@ -59,6 +71,7 @@ while true; do
   break
 done
 echo
+fi
 
 # --- Abhängigkeiten (nur wenn sie fehlen; KEIN Vollpaket 'dnsmasq'!) ---------
 MISSING=""
@@ -84,6 +97,9 @@ install -d /etc/NetworkManager/dnsmasq-shared.d
 install -m 644 captive-portal.conf /etc/NetworkManager/dnsmasq-shared.d/captive-portal.conf
 [ -f "$CONF" ] || install -m 600 wifi-portal.default "$CONF"
 install -m 644 wifi-portal.service /etc/systemd/system/wifi-portal.service
+install -m 755 wifi-portal-update.sh /usr/local/bin/wifi-portal-update
+install -m 644 wifi-portal-update.service /etc/systemd/system/wifi-portal-update.service
+install -m 644 wifi-portal-update.timer /etc/systemd/system/wifi-portal-update.timer
 
 # --- Eingaben in die Einstellungen schreiben ---------------------------------
 set_conf() {
@@ -97,13 +113,20 @@ set_conf() {
 }
 set_conf WP_AP_SSID "$AP_SSID"
 set_conf WP_AP_PASSWORD "$AP_PW"
+set_conf WP_REPO_DIR "$REPO_DIR"   # von hier holt das Auto-Update neue Versionen
 chown root:root "$CONF"
 chmod 600 "$CONF"
 
 # --- Dienst starten ----------------------------------------------------------
 systemctl daemon-reload
 systemctl enable wifi-portal.service
+systemctl enable --now wifi-portal-update.timer
 systemctl restart wifi-portal.service
+
+if [ "$UPDATE" -eq 1 ]; then
+  echo "Update installiert, Dienst neu gestartet."
+  exit 0
+fi
 
 echo
 echo "=== Fertig ==="
@@ -118,5 +141,7 @@ else
   echo "Parallelbetrieb: nein – Einzelbetrieb (Hotspot geht beim Verbinden aus)"
 fi
 echo
+TZ_NAME=$(timedatectl show -p Timezone --value 2>/dev/null || echo "?")
+echo "Auto-Update:      täglich um 03:00 Uhr von GitHub (Zeitzone: $TZ_NAME)"
 echo "Einstellungen:    $CONF"
 echo "Log ansehen:      journalctl -u wifi-portal -f"

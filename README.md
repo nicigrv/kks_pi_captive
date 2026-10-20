@@ -52,6 +52,23 @@ virtuellen Schnittstelle `uap0` und die Verbindung auf `wlan0`:
 
 Parallelbetrieb abschalten: `WP_CONCURRENT='off'` in `/etc/default/wifi-portal`.
 
+## Hotspot-Name und -Passwort ändern
+- **Im Portal:** Link „Hotspot-Name oder -Passwort ändern“ unten auf der Seite. Zum Ändern
+  muss das aktuelle Hotspot-Passwort eingegeben werden. Danach startet der Hotspot neu.
+- **Im Terminal:** `cd ~/kks_pi_captive && sudo bash install.sh` erneut ausführen.
+
+## Automatische Updates
+Jede Nacht um **3:00 Uhr** prüft der Pi, ob es auf GitHub eine neue Version gibt, lädt sie
+herunter (`git pull`) und installiert sie (`install.sh --update`, Einstellungen bleiben).
+Ist der Pi gerade offline, wird das Update übersprungen.
+```bash
+systemctl list-timers wifi-portal-update      # nächster Termin
+sudo systemctl start wifi-portal-update       # jetzt sofort prüfen
+journalctl -u wifi-portal-update              # Log
+sudo systemctl disable --now wifi-portal-update.timer   # Auto-Update abschalten
+```
+Lokal geänderte Dateien im Projektordner verhindern das Update (wird im Log gemeldet).
+
 ## Einstellungen
 `/etc/default/wifi-portal` – Hotspot-Name, Hotspot-Passwort, Parallelbetrieb, Wartezeiten.
 Danach: `sudo systemctl restart wifi-portal`
