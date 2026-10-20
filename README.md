@@ -8,7 +8,15 @@ eingeben, fertig. Klappt die Verbindung nicht, kommt der Hotspot mit Fehlermeldu
 - Raspberry Pi OS (auch Lite) **Bookworm oder neuer** (nutzt NetworkManager). Prüfen: `nmcli general status`
 - Pi mit WLAN (Pi 3/4/5/Zero 2 W)
 
-## Installation (per SSH, z. B. aus der Windows-PowerShell)
+## Schnellinstallation (ein Befehl)
+Auf dem Pi (per SSH, als normaler Benutzer, **ohne** sudo):
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicigrv/kks_pi_captive/main/setup.sh | bash
+```
+Lädt das Projekt nach `~/kks_pi_captive` (oder aktualisiert es) und startet die Installation.
+Ohne erneute Abfrage von Name und Passwort: `… | bash -s -- --update`
+
+## Installation Schritt für Schritt (per SSH, z. B. aus der Windows-PowerShell)
 ```bash
 sudo apt update && sudo apt install -y git
 git clone https://github.com/nicigrv/kks_pi_captive.git
