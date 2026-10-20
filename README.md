@@ -65,17 +65,44 @@ Parallelbetrieb abschalten: `WP_CONCURRENT='off'` in `/etc/default/wifi-portal`.
   muss das aktuelle Hotspot-Passwort eingegeben werden. Danach startet der Hotspot neu.
 - **Im Terminal:** `cd ~/kks_pi_captive && sudo bash install.sh` erneut ausführen.
 
+## Gespeicherte WLANs verwalten
+Im Portal unter „Gespeicherte WLANs verwalten“: alle Netze sehen, mit denen sich der Pi
+automatisch verbindet, die Reihenfolge ändern (▲ ▼, das oberste wird bevorzugt) und alte
+Netze löschen.
+
 ## Automatische Updates
-Jede Nacht um **3:00 Uhr** prüft der Pi, ob es auf GitHub eine neue Version gibt, lädt sie
-herunter (`git pull`) und installiert sie (`install.sh --update`, Einstellungen bleiben).
-Ist der Pi gerade offline, wird das Update übersprungen.
+Jede Nacht um **3:00 Uhr** sucht der Pi auf GitHub nach einer neuen Version und installiert sie
+(Einstellungen bleiben erhalten). Ist der Pi offline, wird das Update übersprungen.
+
+**Update-Kanal** (`WP_UPDATE_CHANNEL` in `/etc/default/wifi-portal`):
+- `auto` (Standard) – neuester **Release** (Git-Tag `v1.2.3`); solange es keinen gibt, neuester Stand von `main`
+- `release` – nur Releases
+- `main` – immer der neueste Stand von `main`
+
+**Abgesichert:**
+1. Die neue Version wird in einen eigenen Ordner entpackt und vorab auf Syntaxfehler geprüft.
+2. Nach der Installation wird geprüft, ob der Dienst sauber läuft (aktiv, kein Absturz, kein Programmfehler).
+3. Wenn nicht: automatischer **Rollback** auf die vorherige Version. Die fehlerhafte Version wird
+   gesperrt und erst wieder versucht, wenn es eine neuere gibt.
+
+Der Projektordner `~/kks_pi_captive` wird dabei nur aktualisiert (`git fetch`), nicht verändert.
+
 ```bash
 systemctl list-timers wifi-portal-update      # nächster Termin
 sudo systemctl start wifi-portal-update       # jetzt sofort prüfen
-journalctl -u wifi-portal-update              # Log
+journalctl -u wifi-portal-update --no-pager   # Log
+cat /var/lib/wifi-portal/version              # installierte Version
 sudo systemctl disable --now wifi-portal-update.timer   # Auto-Update abschalten
 ```
-Lokal geänderte Dateien im Projektordner verhindern das Update (wird im Log gemeldet).
+
+### Neue Version veröffentlichen
+Änderungen auf `main` pushen und testen. Wenn alles passt, einen Release anlegen –
+erst dann holen sich die Pis die neue Version:
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+(oder auf GitHub: *Releases → Draft a new release → Tag `v1.0.1` → Publish*)
 
 ## Einstellungen
 `/etc/default/wifi-portal` – Hotspot-Name, Hotspot-Passwort, Parallelbetrieb, Wartezeiten.

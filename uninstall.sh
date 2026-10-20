@@ -13,5 +13,6 @@ rm -f /usr/local/bin/wifi-portal.py \
       /usr/local/bin/wifi-portal-update \
       /etc/systemd/system/wifi-portal-update.service \
       /etc/systemd/system/wifi-portal-update.timer
+rm -rf /var/lib/wifi-portal
 systemctl daemon-reload
 echo "wifi-portal entfernt. Über das Portal angelegte WLANs heißen 'wlan-<SSID>' und bleiben erhalten."

@@ -113,7 +113,10 @@ set_conf() {
 }
 set_conf WP_AP_SSID "$AP_SSID"
 set_conf WP_AP_PASSWORD "$AP_PW"
-set_conf WP_REPO_DIR "$REPO_DIR"   # von hier holt das Auto-Update neue Versionen
+if [ "$UPDATE" -eq 0 ]; then
+  set_conf WP_REPO_DIR "$REPO_DIR"   # von hier holt das Auto-Update neue Versionen
+fi
+grep -q "^WP_UPDATE_CHANNEL=" "$CONF" || set_conf WP_UPDATE_CHANNEL auto
 chown root:root "$CONF"
 chmod 600 "$CONF"
 
@@ -127,6 +130,17 @@ if [ "$UPDATE" -eq 1 ]; then
   echo "Update installiert, Dienst neu gestartet."
   exit 0
 fi
+
+# --- Installierte Version merken (für Auto-Update und Rollback) --------------
+STATE=/var/lib/wifi-portal
+mkdir -p "$STATE"
+if [ -d "$REPO_DIR/.git" ]; then
+  rgit() { git -c "safe.directory=$REPO_DIR" -C "$REPO_DIR" "$@"; }
+  rgit rev-parse HEAD > "$STATE/commit" 2>/dev/null || true
+  rgit describe --tags --always > "$STATE/version" 2>/dev/null || true
+fi
+rm -rf "$STATE/current"; mkdir -p "$STATE/current"
+tar -C "$REPO_DIR" --exclude=.git -cf - . | tar -C "$STATE/current" -xf -
 
 echo
 echo "=== Fertig ==="
@@ -142,6 +156,8 @@ else
 fi
 echo
 TZ_NAME=$(timedatectl show -p Timezone --value 2>/dev/null || echo "?")
-echo "Auto-Update:      täglich um 03:00 Uhr von GitHub (Zeitzone: $TZ_NAME)"
+CHANNEL=$(. "$CONF" 2>/dev/null; echo "${WP_UPDATE_CHANNEL:-auto}")
+echo "Version:          $(cat /var/lib/wifi-portal/version 2>/dev/null || echo unbekannt)"
+echo "Auto-Update:      täglich um 03:00 Uhr von GitHub (Zeitzone: $TZ_NAME, Kanal: $CHANNEL)"
 echo "Einstellungen:    $CONF"
 echo "Log ansehen:      journalctl -u wifi-portal -f"

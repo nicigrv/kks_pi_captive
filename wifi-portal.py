@@ -540,6 +540,11 @@ button.sec{background:#e8edf5;color:#1d2433;margin-top:10px}
 .info{background:#eef4ff;color:#1e3a8a;padding:10px 12px;border-radius:8px;font-size:.92em}
 .hint{font-size:.85em;font-weight:400;color:#5b6475}
 a{color:#2563eb}
+.net{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #e5e9f0}
+.net b{word-break:break-all}.acts{display:flex;gap:6px;flex-shrink:0}
+button.sm{width:auto;margin:0;padding:8px 11px;font-size:14px;background:#e8edf5;color:#1d2433}
+button.sm[disabled]{opacity:.3}button.del{background:#fde8e8;color:#9b1c1c}
+.badge{background:#e7f8ef;color:#14532d;border-radius:6px;padding:1px 7px;font-size:.78em;margin-left:6px;white-space:nowrap}
 .spin{display:inline-block;width:16px;height:16px;border:3px solid #cfd5df;border-top-color:#2563eb;border-radius:50%;animation:s 1s linear infinite;vertical-align:middle;margin-right:8px}
 @keyframes s{to{transform:rotate(360deg)}}
 </style></head><body><div class="card">"""
@@ -579,7 +584,8 @@ def render_form():
 <button type="submit">Verbinden</button>
 </form>{rescan}
 <p class="hint">{hint}</p>
-<p class="hint"><a href="/settings">Hotspot-Name oder -Passwort ändern</a></p>
+<p class="hint"><a href="/networks">Gespeicherte WLANs verwalten</a> · <a href="/settings">Hotspot-Name oder -Passwort ändern</a></p>
+<p class="hint" style="text-align:center;margin-top:18px">{html.escape(installed_version())}</p>
 <script>document.getElementById('ssid').onchange()</script>""" + FOOT
 
 
@@ -645,6 +651,84 @@ def status_payload():
         "message": state["message"],
         "ap_ssid": AP_SSID,
     }
+
+
+# --- Gespeicherte WLANs verwalten --------------------------------------------
+def installed_version():
+    try:
+        with open("/var/lib/wifi-portal/version") as f:
+            v = f.read().strip()
+        return f"Version {v}" if v else ""
+    except OSError:
+        return ""
+
+
+def saved_networks():
+    """Gespeicherte WLAN-Profile, in der Reihenfolge, in der NetworkManager sie bevorzugt."""
+    out = nmcli("-t", "-f", "NAME,UUID,TYPE,AUTOCONNECT-PRIORITY,TIMESTAMP,ACTIVE,DEVICE",
+                "connection", "show").stdout
+    nets = []
+    for f in map(terse, out.splitlines()):
+        if len(f) < 7 or f[2] != "802-11-wireless" or f[0] == AP_CON:
+            continue
+        raw = nmcli("-g", "802-11-wireless.ssid", "connection", "show", "uuid", f[1]).stdout.strip()
+        ssid = terse(raw)[0] if raw else f[0]
+        try:
+            prio = int(f[3])
+        except ValueError:
+            prio = 0
+        try:
+            ts = int(f[4])
+        except ValueError:
+            ts = 0
+        nets.append({"name": f[0], "uuid": f[1], "ssid": ssid, "prio": prio, "ts": ts,
+                     "active": f[5] == "yes" and f[6] == IFACE})
+    nets.sort(key=lambda n: (-n["prio"], -n["ts"]))
+    return nets
+
+
+def move_network(uuid, direction):
+    """Netz in der Reihenfolge nach oben/unten schieben (über die Autoconnect-Priorität)."""
+    nets = saved_networks()
+    idx = next((i for i, n in enumerate(nets) if n["uuid"] == uuid), None)
+    if idx is None:
+        return False
+    j = idx - 1 if direction == "up" else idx + 1
+    if not 0 <= j < len(nets):
+        return True
+    nets[idx], nets[j] = nets[j], nets[idx]
+    for pos, net in enumerate(nets):
+        want = (len(nets) - pos) * 10
+        if net["prio"] != want:
+            nmcli("connection", "modify", "uuid", net["uuid"], "connection.autoconnect-priority", str(want))
+    return True
+
+
+def render_networks():
+    msg = state.pop("net_msg", "")
+    info = f'<p class="info">{html.escape(msg)}</p>' if msg else ""
+    nets = saved_networks()
+    rows = []
+    for i, n in enumerate(nets):
+        last = (time.strftime("zuletzt verbunden: %d.%m.%Y %H:%M", time.localtime(n["ts"]))
+                if n["ts"] else "noch nie verbunden")
+        badge = '<span class="badge">verbunden</span>' if n["active"] else ""
+        warn = " Der Pi ist gerade damit verbunden und trennt die Verbindung." if n["active"] else ""
+        question = html.escape(json.dumps(f"„{n['ssid']}“ wirklich löschen?{warn}"), quote=True)
+        rows.append(f"""<div class="net"><div><b>{html.escape(n["ssid"])}</b>{badge}<br>
+<span class="hint">{last}</span></div>
+<form method="post" action="/networks" class="acts"><input type="hidden" name="uuid" value="{html.escape(n["uuid"])}">
+<button class="sm" name="action" value="up" title="nach oben"{" disabled" if i == 0 else ""}>&#9650;</button>
+<button class="sm" name="action" value="down" title="nach unten"{" disabled" if i == len(nets) - 1 else ""}>&#9660;</button>
+<button class="sm del" name="action" value="delete" onclick="return confirm({question})">Löschen</button>
+</form></div>""")
+    body = "".join(rows) if rows else "<p>Es sind noch keine WLANs gespeichert.</p>"
+    return HEAD + f"""
+<h1>Gespeicherte WLANs</h1>
+<p>Mit diesen Netzen verbindet sich <b>{html.escape(HOSTNAME)}</b> automatisch – das oberste wird bevorzugt,
+wenn mehrere in Reichweite sind.</p>{info}
+{body}
+<p class="hint" style="margin-top:18px"><a href="/">&larr; zurück zur WLAN-Auswahl</a></p>""" + FOOT
 
 
 # --- Hotspot-Einstellungen im Portal -----------------------------------------
@@ -756,6 +840,8 @@ class Portal(BaseHTTPRequestHandler):
             return self.send(200, json.dumps(status_payload()), ctype="application/json")
         if path == "/settings":
             return self.send(200, render_settings())
+        if path == "/networks":
+            return self.send(200, render_networks())
         if path != "/":
             return self.redirect()
         job = state["job"]
@@ -778,6 +864,8 @@ class Portal(BaseHTTPRequestHandler):
                              'Die Liste wird gleich neu geladen.</p>' + FOOT)
         if self.path == "/settings":
             return self.handle_settings(body)
+        if self.path == "/networks":
+            return self.handle_networks(body)
         if self.path != "/connect":
             return self.redirect(303)
         job = state["job"]
@@ -801,6 +889,26 @@ class Portal(BaseHTTPRequestHandler):
         state["job"] = {"ssid": ssid, "status": "connecting" if live else "legacy"}
         connect_requests.put((ssid, psk, manual))
         self.send(200, render_status())
+
+    def handle_networks(self, body):
+        job = state["job"]
+        if job and job.get("status") in ("connecting", "connected", "legacy"):
+            state["net_msg"] = "Bitte warten, bis die WLAN-Verbindung abgeschlossen ist."
+            return self.send(303, "", {"Location": f"http://{AP_IP}/networks"})
+        form = urllib.parse.parse_qs(body)
+        uuid = form.get("uuid", [""])[0]
+        action = form.get("action", [""])[0]
+        net = next((n for n in saved_networks() if n["uuid"] == uuid), None)
+        if not net:
+            state["net_msg"] = "Dieses WLAN gibt es nicht mehr."
+        elif action == "delete":
+            r = nmcli("connection", "delete", "uuid", uuid)
+            state["net_msg"] = (f"„{net['ssid']}“ wurde gelöscht." if r.returncode == 0
+                                else f"Löschen fehlgeschlagen: {r.stderr.strip()}")
+            log(f"Gespeichertes WLAN '{net['ssid']}' im Portal gelöscht")
+        elif action in ("up", "down"):
+            move_network(uuid, action)
+        self.send(303, "", {"Location": f"http://{AP_IP}/networks"})
 
     def handle_settings(self, body):
         global AP_SSID, AP_PASSWORD

@@ -25,6 +25,11 @@ WP_RETRY=300
 # Welche Verbindungen als "online" zählen. Nur "wifi" = Hotspot auch bei LAN-Kabel
 WP_ONLINE_TYPES='wifi,ethernet'
 
+# Auto-Update (jede Nacht um 3:00 Uhr):
+#   auto    = neuester Release (Git-Tag v1.2.3) – solange es keinen gibt, neuester Stand von main
+#   release = nur Releases, main = immer der neueste Stand von main
+WP_UPDATE_CHANNEL='auto'
+
 # Interner Port des Portals (Port 80 aus dem Hotspot wird per nftables dorthin umgeleitet,
 # damit ein anderer Webserver wie Traefik/Docker auf Port 80 nicht stört)
 WP_PORT=8099
